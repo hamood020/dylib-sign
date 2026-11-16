@@ -53,4 +53,5 @@ targets:
           - "$(SRCROOT)/Vendor/zsign/src/common"
           - "$(SRCROOT)/Vendor/zsign/src/third-party/zlib"
           - "$(SRCROOT)/Vendor/zsign/src/third-party/minizip"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
