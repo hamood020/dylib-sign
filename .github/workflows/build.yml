@@ -44,6 +44,38 @@ jobs:
           cp -R build/Build/Products/Release-iphoneos/DylibSign.app out/Payload/
           cd out && zip -qry DylibSign-unsigned.ipa Payload
 
+      - name: Inspect app bundle
+        if: always()
+        run: |
+          APP=build/Build/Products/Release-iphoneos/DylibSign.app
+          {
+            echo '## App bundle'
+            echo '```'
+            find "$APP" -maxdepth 3 | sed "s#^$APP#.#" | sort
+            echo
+            echo '--- lipo'
+            lipo -info "$APP/DylibSign" || true
+            echo '--- otool -L'
+            otool -L "$APP/DylibSign" || true
+            echo '--- LC_RPATH / min OS'
+            otool -l "$APP/DylibSign" | grep -A3 -E 'LC_RPATH|LC_BUILD_VERSION' || true
+            for f in "$APP"/Frameworks/*.framework; do
+              [ -d "$f" ] || continue
+              b="$f/$(basename "$f" .framework)"
+              echo "--- $(basename "$f")"
+              lipo -info "$b" || true
+              otool -l "$b" | grep -A4 LC_BUILD_VERSION | head -5 || true
+              plutil -p "$f/Info.plist" | grep -E 'CFBundleExecutable|MinimumOSVersion|CFBundleIdentifier' || true
+            done
+            echo '--- Info.plist'
+            plutil -p "$APP/Info.plist"
+            echo '```'
+            echo '## Build errors/warnings'
+            echo '```'
+            grep -E 'error:|warning:' xcodebuild.log | grep -v '/Vendor/zsign/' | sort -u | head -60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: DylibSign-unsigned
