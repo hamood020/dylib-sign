@@ -1,0 +1,56 @@
+name: DylibSign
+options:
+  bundleIdPrefix: com.dylibsign
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  OpenSSL:
+    url: https://github.com/krzyzanowskim/OpenSSL
+    exactVersion: "3.6.5000"
+
+targets:
+  DylibSign:
+    type: application
+    platform: iOS
+    sources:
+      - path: DylibSign
+      # zsign is downloaded by scripts/fetch-zsign.sh (not committed)
+      - path: Vendor/zsign/src
+        includes:
+          - "*.cpp"
+          - "*.h"
+          - "common/*.cpp"
+          - "common/*.h"
+          - "third-party/zlib/*.c"
+          - "third-party/zlib/*.h"
+          - "third-party/minizip/ioapi.c"
+          - "third-party/minizip/zip.c"
+          - "third-party/minizip/unzip.c"
+          - "third-party/minizip/*.h"
+        excludes:
+          - "zsign.cpp"
+          - "third-party/minizip/iowin32.h"
+    dependencies:
+      - package: OpenSSL
+    settings:
+      base:
+        PRODUCT_NAME: DylibSign
+        PRODUCT_BUNDLE_IDENTIFIER: com.dylibsign.app
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: DylibSign/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: DylibSign/Bridge/DylibSign-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: gnu++17
+        CLANG_ENABLE_OBJC_ARC: YES
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Vendor/zsign/src"
+          - "$(SRCROOT)/Vendor/zsign/src/common"
+          - "$(SRCROOT)/Vendor/zsign/src/third-party/zlib"
+          - "$(SRCROOT)/Vendor/zsign/src/third-party/minizip"
+        CODE_SIGN_STYLE: Automatic
