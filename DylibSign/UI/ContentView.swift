@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var showMods = false
     @State private var showLog = true
     @State private var showShare = false
+    @State private var showGuide = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -35,6 +36,10 @@ struct ContentView: View {
             Button("حسناً", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
+        }
+        .sheet(isPresented: $showGuide) {
+            IPAGuideSheet(onPickFile: { model.pick(.ipa) })
+                .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showShare) {
             if let output = model.output {
@@ -99,6 +104,25 @@ struct ContentView: View {
                      isLoading: model.preparing == .ipa,
                      onPick: { model.pick(.ipa) },
                      onClear: { if let url = model.ipa { model.remove(url) } })
+
+            Button {
+                showGuide = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "questionmark.circle.fill")
+                    Text("كيف أحصل على ملف IPA؟")
+                    Spacer()
+                    Image(systemName: "paperplane.fill")
+                        .foregroundColor(Color(red: 0.16, green: 0.63, blue: 0.89))
+                }
+                .font(.system(.footnote, design: .rounded).weight(.semibold))
+                .foregroundColor(Theme.gold)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
