@@ -19,6 +19,15 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Cache OpenSSL
+        uses: actions/cache@v4
+        with:
+          path: Vendor/openssl
+          key: openssl-3.3.2-ios15-static-v1
+
+      - name: Build OpenSSL (static)
+        run: bash scripts/build-openssl.sh
+
       - name: Fetch zsign
         run: bash scripts/fetch-zsign.sh
 
@@ -53,6 +62,7 @@ jobs:
           done
           codesign --force --sign - --timestamp=none --generate-entitlement-der "$APP"
           codesign --verify --deep --strict "$APP"
+          if [ -d "$APP/Frameworks" ]; then echo "error: unexpected embedded frameworks" >&2; ls -R "$APP/Frameworks"; exit 1; fi
           codesign -dv "$APP" 2>&1 | head -8
           cd out && zip -qry DylibSign-unsigned.ipa Payload
 
