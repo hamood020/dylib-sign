@@ -58,6 +58,7 @@ jobs:
           # Ad-hoc sign everything so external signers find a signature slot to replace,
           # and so OpenSSL.framework no longer carries its author's (foreign team) signature.
           for fw in "$APP"/Frameworks/*.framework; do
+            [ -d "$fw" ] || continue
             codesign --force --sign - --timestamp=none "$fw"
           done
           codesign --force --sign - --timestamp=none --generate-entitlement-der "$APP"
