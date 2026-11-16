@@ -11,7 +11,7 @@ enum ImportTarget: Identifiable {
     var contentTypes: [UTType] {
         switch self {
         case .icon: return [.png]
-        case .tweak, .extra: return [.item, .folder]
+        case .extra: return [.item, .folder]
         default: return [.item]
         }
     }
@@ -19,7 +19,7 @@ enum ImportTarget: Identifiable {
     var allowedExtensions: Set<String> {
         switch self {
         case .ipa: return ["ipa", "tipa"]
-        case .tweak: return ["dylib", "deb", "framework"]
+        case .tweak: return ["dylib", "deb"]
         case .extra: return ["dylib", "deb", "framework", "bundle"]
         case .icon: return ["png"]
         case .p12: return ["p12", "pfx"]
@@ -37,6 +37,7 @@ final class InjectorViewModel: ObservableObject {
     @Published var options = InjectOptions()
     @Published var signing = SigningConfig()
 
+    @Published var preparing: ImportTarget?
     @Published var isRunning = false
     @Published var logLines: [String] = []
     @Published var output: URL?
@@ -49,50 +50,99 @@ final class InjectorViewModel: ObservableObject {
     }()
 
     var canStart: Bool {
-        guard ipa != nil, !tweaks.isEmpty, !isRunning else { return false }
+        guard ipa != nil, !tweaks.isEmpty, !isRunning, preparing == nil else { return false }
         if signing.mode == .certificate {
             return signing.p12 != nil && signing.provision != nil
         }
         return true
     }
 
-    func handleImport(_ result: Result<[URL], Error>, target: ImportTarget) {
-        switch result {
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-        case .success(let urls):
-            for url in urls {
-                guard target.allowedExtensions.contains(url.pathExtension.lowercased()) else {
-                    errorMessage = "الملف \(url.lastPathComponent) غير مناسب. المسموح: \(target.allowedExtensions.sorted().joined(separator: ", "))"
-                    continue
+    var missingRequirement: String? {
+        if ipa == nil { return "اختر ملف IPA" }
+        if tweaks.isEmpty { return "أضف dylib أو deb واحداً على الأقل" }
+        if signing.mode == .certificate {
+            if signing.p12 == nil { return "اختر ملف الشهادة ‎.p12‎" }
+            if signing.provision == nil { return "اختر ملف ‎.mobileprovision‎" }
+        }
+        return nil
+    }
+
+    var lastLog: String? { logLines.last }
+
+    // MARK: - Picking
+
+    func pick(_ target: ImportTarget) {
+        guard preparing == nil, !isRunning else { return }
+        DocumentPicker.shared.present(types: target.contentTypes, allowsMultiple: target.allowsMultiple) { [weak self] urls in
+            Task { @MainActor in self?.receive(urls, for: target) }
+        }
+    }
+
+    private func receive(_ urls: [URL], for target: ImportTarget) {
+        let accepted = urls.filter { target.allowedExtensions.contains($0.pathExtension.lowercased()) }
+        let rejected = urls.filter { !accepted.contains($0) }
+        if !rejected.isEmpty {
+            errorMessage = "ملف غير مناسب: \(rejected.map(\.lastPathComponent).joined(separator: "، "))\nالمسموح: \(target.allowedExtensions.sorted().joined(separator: ", "))"
+        }
+        guard !accepted.isEmpty else { return }
+
+        preparing = target
+        let dir = inputsDir
+        Task.detached(priority: .userInitiated) {
+            var stored: [URL] = []
+            var failure: String?
+            for url in accepted {
+                do { stored.append(try Self.store(url, in: dir)) } catch {
+                    failure = "تعذّر تجهيز \(url.lastPathComponent): \(error.localizedDescription)"
                 }
-                do {
-                    let local = try copyIn(url)
-                    switch target {
-                    case .ipa: ipa = local
-                    case .tweak: tweaks.append(local)
-                    case .extra: extras.append(local)
-                    case .icon: icon = local
-                    case .p12: signing.p12 = local
-                    case .provision: signing.provision = local
-                    }
-                } catch {
-                    errorMessage = "تعذّر نسخ \(url.lastPathComponent): \(error.localizedDescription)"
-                }
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.preparing = nil
+                if let failure { self.errorMessage = failure }
+                for local in stored { self.assign(local, to: target) }
             }
         }
     }
 
-    /// Files from the picker are security-scoped; copy them into the sandbox right away.
-    private func copyIn(_ url: URL) throws -> URL {
+    private func assign(_ url: URL, to target: ImportTarget) {
+        switch target {
+        case .ipa: ipa = url; output = nil
+        case .tweak: if !tweaks.contains(where: { $0.lastPathComponent == url.lastPathComponent }) { tweaks.append(url) }
+        case .extra: if !extras.contains(where: { $0.lastPathComponent == url.lastPathComponent }) { extras.append(url) }
+        case .icon: icon = url
+        case .p12: signing.p12 = url
+        case .provision: signing.provision = url
+        }
+    }
+
+    /// Moves the picker's copy into our own Inputs folder (falls back to copying).
+    nonisolated private static func store(_ url: URL, in dir: URL) throws -> URL {
+        let fm = FileManager.default
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let dir = inputsDir.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let destination = dir.appendingPathComponent(url.lastPathComponent)
-        try FileManager.default.copyItem(at: url, to: destination)
+        let folder = dir.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let destination = folder.appendingPathComponent(url.lastPathComponent)
+        do {
+            try fm.moveItem(at: url, to: destination)
+        } catch {
+            try fm.copyItem(at: url, to: destination)
+        }
         return destination
     }
+
+    func remove(_ url: URL) {
+        tweaks.removeAll { $0 == url }
+        extras.removeAll { $0 == url }
+        if ipa == url { ipa = nil }
+        if icon == url { icon = nil }
+        if signing.p12 == url { signing.p12 = nil }
+        if signing.provision == url { signing.provision = nil }
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+    }
+
+    // MARK: - Run
 
     func start() {
         guard let ipa, canStart else { return }
@@ -102,7 +152,8 @@ final class InjectorViewModel: ObservableObject {
         output = nil
         logLines = []
 
-        Thread.detachNewThread { [weak self] in
+        // Large stack: zsign uses big buffers and deep recursion when walking the bundle.
+        let thread = Thread { [weak self] in
             let injector = Injector { line in
                 Task { @MainActor in self?.logLines.append(line) }
             }
@@ -114,6 +165,9 @@ final class InjectorViewModel: ObservableObject {
                 Task { @MainActor in self?.finish(output: nil, error: message) }
             }
         }
+        thread.stackSize = 16 * 1024 * 1024
+        thread.qualityOfService = .userInitiated
+        thread.start()
     }
 
     private func finish(output: URL?, error: String?) {
@@ -126,13 +180,26 @@ final class InjectorViewModel: ObservableObject {
     }
 
     func reset() {
+        guard !isRunning else { return }
         ipa = nil
         tweaks = []
         extras = []
         icon = nil
+        signing.p12 = nil
+        signing.provision = nil
+        signing.password = ""
         output = nil
         logLines = []
         try? FileManager.default.removeItem(at: inputsDir)
         try? FileManager.default.createDirectory(at: inputsDir, withIntermediateDirectories: true)
+    }
+
+    nonisolated static func sizeText(_ url: URL) -> String {
+        var size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        if size == nil, let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
+            size = attributes[.size] as? Int
+        }
+        guard let size, size > 0 else { return url.pathExtension.uppercased() }
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 }

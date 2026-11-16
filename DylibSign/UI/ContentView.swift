@@ -1,41 +1,37 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var model = InjectorViewModel()
-    @State private var importTarget: ImportTarget = .ipa
-    @State private var showImporter = false
+    @State private var showMods = false
+    @State private var showLog = true
     @State private var showShare = false
 
     var body: some View {
-        NavigationView {
-            Form {
-                ipaSection
-                tweaksSection
-                extrasSection
-                injectSection
-                modsSection
-                signingSection
-                actionSection
-                if !model.logLines.isEmpty { logSection }
-            }
-            .navigationTitle("Dylib Sign")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("مسح") { model.reset() }
-                        .disabled(model.isRunning)
+        ZStack(alignment: .bottom) {
+            Theme.background.ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 16) {
+                    header
+                    appCard
+                    tweaksCard
+                    injectCard
+                    modsCard
+                    signingCard
+                    if model.output != nil { resultCard }
+                    if !model.logLines.isEmpty { logCard }
+                    Color.clear.frame(height: 110) // room for the bottom button
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
             }
+            .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in hideKeyboard() })
+
+            bottomBar
         }
-        .navigationViewStyle(.stack)
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: importTarget.contentTypes,
-            allowsMultipleSelection: importTarget.allowsMultiple
-        ) { result in
-            model.handleImport(result, target: importTarget)
-        }
-        .alert("تنبيه", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
+        .preferredColorScheme(.dark)
+        .alert("تنبيه", isPresented: Binding(get: { model.errorMessage != nil },
+                                            set: { if !$0 { model.errorMessage = nil } })) {
             Button("حسناً", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
@@ -47,183 +43,296 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Header
 
-    private var ipaSection: some View {
-        Section {
-            pickRow(title: "ملف IPA", file: model.ipa, systemImage: "app.badge") { open(.ipa) }
-        } header: {
-            Text("التطبيق")
-        } footer: {
-            Text("يجب أن يكون الملف مفكوك التشفير (decrypted).")
-        }
-    }
-
-    private var tweaksSection: some View {
-        Section {
-            ForEach(model.tweaks, id: \.self) { url in
-                Label(url.lastPathComponent, systemImage: icon(for: url))
+    private var header: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(LinearGradient(colors: [Theme.navy, Theme.teal], startPoint: .topLeading, endPoint: .bottomTrailing))
+                VStack(spacing: 0) {
+                    Text("DS")
+                        .font(.system(size: 22, weight: .heavy, design: .rounded))
+                        .foregroundColor(.white)
+                    Text(".dylib")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundColor(Theme.gold)
+                }
+                .environment(\.layoutDirection, .leftToRight)
             }
-            .onDelete { model.tweaks.remove(atOffsets: $0) }
+            .frame(width: 58, height: 58)
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.15)))
+            .shadow(color: Theme.teal.opacity(0.5), radius: 12, y: 4)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Dylib Sign")
+                    .font(.system(size: 26, weight: .heavy, design: .rounded))
+                    .foregroundColor(.white)
+                Text("حقن الأدوات في التطبيقات بدون جلبريك")
+                    .font(.footnote)
+                    .foregroundColor(Theme.secondaryText)
+            }
+            Spacer()
             Button {
-                open(.tweak)
+                withAnimation { model.reset() }
             } label: {
-                Label("إضافة dylib / deb", systemImage: "plus.circle.fill")
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(Color.white.opacity(0.1)))
             }
-        } header: {
-            Text("الأدوات المراد حقنها")
+            .disabled(model.isRunning)
+            .accessibilityLabel("مسح الكل")
+        }
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Cards
+
+    private var appCard: some View {
+        StepCard(step: 1, title: "التطبيق", subtitle: "ملف IPA مفكوك التشفير", systemImage: "app.badge.fill") {
+            FileSlot(placeholder: "اختر ملف IPA",
+                     hint: "اضغط لاختيار الملف من تطبيق الملفات",
+                     systemImage: "square.and.arrow.down",
+                     file: model.ipa,
+                     isLoading: model.preparing == .ipa,
+                     onPick: { model.pick(.ipa) },
+                     onClear: { if let url = model.ipa { model.remove(url) } })
         }
     }
 
-    private var extrasSection: some View {
-        Section {
-            ForEach(model.extras, id: \.self) { url in
-                Label(url.lastPathComponent, systemImage: icon(for: url))
+    private var tweaksCard: some View {
+        StepCard(step: 2, title: "الأدوات", subtitle: "dylib أو deb — يمكن إضافة أكثر من ملف", systemImage: "syringe.fill") {
+            VStack(spacing: 8) {
+                ForEach(model.tweaks, id: \.self) { url in
+                    FileChip(url: url) { withAnimation { model.remove(url) } }
+                }
+                AddButton(title: "إضافة dylib / deb", isLoading: model.preparing == .tweak) { model.pick(.tweak) }
+
+                DisclosureGroup {
+                    VStack(spacing: 8) {
+                        ForEach(model.extras, id: \.self) { url in
+                            FileChip(url: url) { withAnimation { model.remove(url) } }
+                        }
+                        AddButton(title: "إضافة framework / dylib", isLoading: model.preparing == .extra) { model.pick(.extra) }
+                        Text("تُنسخ إلى Frameworks بدون حقن، مثل CydiaSubstrate.framework من ElleKit إذا كانت الأداة تحتاجه.")
+                            .font(.caption2)
+                            .foregroundColor(Theme.secondaryText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Text("ملفات مساعدة (اختياري)\(model.extras.isEmpty ? "" : " • \(model.extras.count)")")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.85))
+                }
+                .tint(Theme.gold)
+                .padding(.top, 4)
             }
-            .onDelete { model.extras.remove(atOffsets: $0) }
-            Button {
-                open(.extra)
+        }
+    }
+
+    private var injectCard: some View {
+        StepCard(step: 3, title: "طريقة الحقن", systemImage: "point.3.connected.trianglepath.dotted") {
+            VStack(alignment: .leading, spacing: 12) {
+                ChoicePicker(options: InjectLocation.allCases, selection: $model.options.location) { $0.title }
+                    .environment(\.layoutDirection, .leftToRight)
+                OptionToggle(title: "حقن ضعيف (Weak)", subtitle: "لا ينهار التطبيق إذا لم يجد الدايلب",
+                             isOn: $model.options.weakInject)
+                OptionToggle(title: "إصلاح مسار CydiaSubstrate", subtitle: "مطلوب لأغلب أدوات الجلبريك",
+                             isOn: $model.options.fixSubstratePaths)
+                OptionToggle(title: "تجاوز فحص التشفير", subtitle: "غير مُستحسن — التطبيق المشفّر لن يعمل",
+                             isOn: $model.options.skipEncryptionCheck)
+            }
+        }
+    }
+
+    private var modsCard: some View {
+        StepCard(step: 4, title: "تعديلات التطبيق", subtitle: "اختياري — اترك الحقول فارغة للإبقاء على الأصل",
+                 systemImage: "slider.horizontal.3") {
+            DisclosureGroup(isExpanded: $showMods) {
+                VStack(spacing: 10) {
+                    StyledField(title: "Bundle ID جديد", systemImage: "number", text: $model.options.bundleID)
+                        .environment(\.layoutDirection, .leftToRight)
+                    StyledField(title: "اسم التطبيق", systemImage: "textformat", text: $model.options.displayName)
+                    StyledField(title: "الإصدار", systemImage: "tag", text: $model.options.version, keyboard: .decimalPad)
+                    FileSlot(placeholder: "أيقونة جديدة (PNG)",
+                             hint: model.signing.mode == .none ? "تحتاج اختيار توقيع لتطبيقها" : "اختياري",
+                             systemImage: "photo",
+                             file: model.icon,
+                             isLoading: model.preparing == .icon,
+                             onPick: { model.pick(.icon) },
+                             onClear: { if let url = model.icon { model.remove(url) } })
+                    Divider().overlay(Theme.stroke)
+                    OptionToggle(title: "حذف URL Schemes", isOn: $model.options.removeURLSchemes)
+                    OptionToggle(title: "تفعيل Document Browser", isOn: $model.options.enableDocumentBrowser)
+                    OptionToggle(title: "حذف Extensions", isOn: $model.options.removeExtensions)
+                    OptionToggle(title: "حذف مجلد Watch", isOn: $model.options.removeWatchApp)
+                    OptionToggle(title: "حذف UISupportedDevices", isOn: $model.options.removeSupportedDevices)
+                }
+                .padding(.top, 10)
             } label: {
-                Label("إضافة ملف", systemImage: "plus.circle")
+                Text(showMods ? "إخفاء التعديلات" : "عرض التعديلات")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.85))
             }
-        } header: {
-            Text("ملفات إضافية (اختياري)")
-        } footer: {
-            Text("تُنسخ إلى Frameworks بدون حقن، مثل CydiaSubstrate.framework (ElleKit) أو مكتبات تعتمد عليها الأداة.")
+            .tint(Theme.gold)
         }
     }
 
-    private var injectSection: some View {
-        Section {
-            Picker("مسار الحقن", selection: $model.options.location) {
-                ForEach(InjectLocation.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            Toggle("حقن ضعيف (Weak)", isOn: $model.options.weakInject)
-            Toggle("إصلاح مسار CydiaSubstrate", isOn: $model.options.fixSubstratePaths)
-            Toggle("تجاوز فحص التشفير", isOn: $model.options.skipEncryptionCheck)
-        } header: {
-            Text("الحقن")
-        }
-    }
+    private var signingCard: some View {
+        StepCard(step: 5, title: "التوقيع", subtitle: "اختياري", systemImage: "signature") {
+            VStack(alignment: .leading, spacing: 12) {
+                ChoicePicker(options: SigningMode.allCases, selection: $model.signing.mode) { $0.title }
+                Text(model.signing.mode.footnote)
+                    .font(.caption)
+                    .foregroundColor(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
 
-    private var modsSection: some View {
-        Section {
-            TextField("Bundle ID جديد", text: $model.options.bundleID)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            TextField("اسم التطبيق", text: $model.options.displayName)
-            TextField("الإصدار", text: $model.options.version)
-                .keyboardType(.decimalPad)
-            pickRow(title: "أيقونة (PNG)", file: model.icon, systemImage: "photo") { open(.icon) }
-            Toggle("حذف URL Schemes", isOn: $model.options.removeURLSchemes)
-            Toggle("تفعيل Document Browser", isOn: $model.options.enableDocumentBrowser)
-            Toggle("حذف Extensions", isOn: $model.options.removeExtensions)
-            Toggle("حذف مجلد Watch", isOn: $model.options.removeWatchApp)
-            Toggle("حذف UISupportedDevices", isOn: $model.options.removeSupportedDevices)
-        } header: {
-            Text("تعديلات (اختياري)")
-        } footer: {
-            Text("اترك الحقول فارغة للإبقاء على القيم الأصلية. تغيير الأيقونة يتطلب التوقيع.")
-        }
-    }
-
-    private var signingSection: some View {
-        Section {
-            Picker("التوقيع", selection: $model.signing.mode) {
-                ForEach(SigningMode.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-
-            if model.signing.mode == .certificate {
-                pickRow(title: "الشهادة (.p12)", file: model.signing.p12, systemImage: "key.fill") { open(.p12) }
-                SecureField("كلمة مرور الشهادة", text: $model.signing.password)
-                pickRow(title: "البروفايل (.mobileprovision)", file: model.signing.provision, systemImage: "doc.badge.gearshape") {
-                    open(.provision)
+                if model.signing.mode == .certificate {
+                    FileSlot(placeholder: "الشهادة (.p12)", hint: "ملف الشهادة",
+                             systemImage: "key.fill", file: model.signing.p12,
+                             isLoading: model.preparing == .p12,
+                             onPick: { model.pick(.p12) },
+                             onClear: { if let url = model.signing.p12 { model.remove(url) } })
+                    StyledField(title: "كلمة مرور الشهادة", systemImage: "lock.fill",
+                                text: $model.signing.password, secure: true)
+                    FileSlot(placeholder: "البروفايل (.mobileprovision)", hint: "ملف التوزيع المطابق للشهادة",
+                             systemImage: "doc.badge.gearshape.fill", file: model.signing.provision,
+                             isLoading: model.preparing == .provision,
+                             onPick: { model.pick(.provision) },
+                             onClear: { if let url = model.signing.provision { model.remove(url) } })
                 }
             }
-        } header: {
-            Text("التوقيع (اختياري)")
-        } footer: {
-            Text(model.signing.mode.footnote)
         }
     }
 
-    private var actionSection: some View {
-        Section {
+    private var resultCard: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 44))
+                .foregroundColor(Theme.success)
+            Text("تم الحقن بنجاح")
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .foregroundColor(.white)
+            if let output = model.output {
+                Text(output.lastPathComponent)
+                    .font(.footnote.monospaced())
+                    .foregroundColor(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .environment(\.layoutDirection, .leftToRight)
+            }
+            Text("محفوظ في: الملفات ← على الـ iPhone ← Dylib Sign ← Output")
+                .font(.caption)
+                .foregroundColor(Theme.secondaryText)
+                .multilineTextAlignment(.center)
             Button {
-                model.start()
+                showShare = true
+            } label: {
+                Label("مشاركة / حفظ الملف", systemImage: "square.and.arrow.up")
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .foregroundColor(Theme.navy)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(Capsule().fill(Theme.goldGradient))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Theme.success.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Theme.success.opacity(0.4)))
+        .transition(.scale.combined(with: .opacity))
+    }
+
+    private var logCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation { showLog.toggle() }
             } label: {
                 HStack {
+                    Label("السجل", systemImage: "text.alignleft")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
                     Spacer()
-                    if model.isRunning {
-                        ProgressView().padding(.trailing, 6)
-                        Text("جارٍ الحقن…")
-                    } else {
-                        Label("ابدأ الحقن", systemImage: "syringe.fill").font(.headline)
-                    }
-                    Spacer()
+                    Image(systemName: showLog ? "chevron.up" : "chevron.down")
+                        .foregroundColor(Theme.secondaryText)
                 }
             }
-            .disabled(!model.canStart)
+            .buttonStyle(.plain)
 
-            if let output = model.output {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(output.lastPathComponent, systemImage: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                    Text("محفوظ في تطبيق الملفات ← Dylib Sign ← Output")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            if showLog {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(model.logLines.joined(separator: "\n"))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Button {
-                    showShare = true
-                } label: {
-                    Label("مشاركة / حفظ الملف", systemImage: "square.and.arrow.up")
-                }
+                .environment(\.layoutDirection, .leftToRight)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.35)))
             }
         }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Theme.stroke))
     }
 
-    private var logSection: some View {
-        Section {
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(model.logLines.joined(separator: "\n"))
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } header: {
-            Text("السجل")
-        }
-    }
+    // MARK: - Bottom bar
 
-    // MARK: - Helpers
-
-    private func open(_ target: ImportTarget) {
-        importTarget = target
-        showImporter = true
-    }
-
-    private func pickRow(title: String, file: URL?, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Label(title, systemImage: systemImage)
-                Spacer()
-                Text(file?.lastPathComponent ?? "اختيار")
-                    .foregroundColor(file == nil ? .accentColor : .secondary)
+    private var bottomBar: some View {
+        VStack(spacing: 8) {
+            if model.isRunning, let last = model.lastLog {
+                Text(last)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
                     .lineLimit(1)
                     .truncationMode(.middle)
+            } else if let missing = model.missingRequirement {
+                Text(missing)
+                    .font(.caption)
+                    .foregroundColor(Theme.gold.opacity(0.9))
             }
+
+            Button {
+                hideKeyboard()
+                showLog = true
+                model.start()
+            } label: {
+                HStack(spacing: 10) {
+                    if model.isRunning {
+                        ProgressView().tint(Theme.navy)
+                        Text("جارٍ الحقن…")
+                    } else {
+                        Image(systemName: "syringe.fill")
+                        Text("ابدأ الحقن")
+                    }
+                }
+                .font(.system(.headline, design: .rounded).weight(.heavy))
+                .foregroundColor(Theme.navy)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(Capsule().fill(Theme.goldGradient))
+                .opacity(model.canStart || model.isRunning ? 1 : 0.45)
+                .shadow(color: Theme.gold.opacity(model.canStart ? 0.45 : 0), radius: 14, y: 6)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canStart)
         }
-        .foregroundColor(.primary)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(
+            LinearGradient(colors: [Theme.navy.opacity(0), Theme.navy.opacity(0.85), Theme.navy],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(edges: .bottom)
+        )
     }
 
-    private func icon(for url: URL) -> String {
-        switch url.pathExtension.lowercased() {
-        case "deb": return "shippingbox"
-        case "framework", "bundle": return "folder"
-        default: return "puzzlepiece.extension"
-        }
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 
