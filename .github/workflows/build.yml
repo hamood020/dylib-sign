@@ -45,13 +45,27 @@ jobs:
         run: |
           mkdir -p out/Payload
           cp -R build/Build/Products/Release-iphoneos/DylibSign.app out/Payload/
+          APP=out/Payload/DylibSign.app
+          # Ad-hoc sign everything so external signers find a signature slot to replace,
+          # and so OpenSSL.framework no longer carries its author's (foreign team) signature.
+          for fw in "$APP"/Frameworks/*.framework; do
+            codesign --force --sign - --timestamp=none "$fw"
+          done
+          codesign --force --sign - --timestamp=none --generate-entitlement-der "$APP"
+          codesign --verify --deep --strict "$APP"
+          codesign -dv "$APP" 2>&1 | head -8
           cd out && zip -qry DylibSign-unsigned.ipa Payload
 
       - name: Inspect app bundle
         if: always()
         run: |
-          APP=build/Build/Products/Release-iphoneos/DylibSign.app
+          APP=out/Payload/DylibSign.app
           {
+            echo '## Code signature'
+            echo '```'
+            codesign -dv "$APP" 2>&1 || true
+            codesign -dv "$APP"/Frameworks/OpenSSL.framework 2>&1 || true
+            echo '```'
             echo '## App bundle'
             echo '```'
             find "$APP" -maxdepth 3 | sed "s#^$APP#.#" | sort
