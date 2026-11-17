@@ -250,6 +250,9 @@ struct ContentView: View {
                              isLoading: model.preparing == .provision,
                              onPick: { model.pick(.provision) },
                              onClear: { if let url = model.signing.provision { model.remove(url) } })
+                    OptionToggle(title: "تثبيت مباشرة بعد التوقيع",
+                                 subtitle: "يظهر طلب التثبيت من النظام فور انتهاء الحقن",
+                                 isOn: $model.autoInstall)
                 }
             }
         }
@@ -274,6 +277,16 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(Theme.secondaryText)
                 .multilineTextAlignment(.center)
+
+            if model.canInstall {
+                installSection
+            } else {
+                Text("للتثبيت المباشر على الجهاز اختر «بشهادة» في خطوة التوقيع.")
+                    .font(.caption2)
+                    .foregroundColor(Theme.gold.opacity(0.85))
+                    .multilineTextAlignment(.center)
+            }
+
             Button {
                 showShare = true
             } label: {
@@ -291,6 +304,60 @@ struct ContentView: View {
         .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Theme.success.opacity(0.12)))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Theme.success.opacity(0.4)))
         .transition(.scale.combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private var installSection: some View {
+        let state = model.installState
+        VStack(spacing: 10) {
+            Button {
+                model.install()
+            } label: {
+                HStack(spacing: 10) {
+                    switch state {
+                    case .idle, .finished:
+                        Image(systemName: "iphone.and.arrow.forward")
+                        Text(state == .finished ? "إعادة التثبيت" : "تثبيت على الجهاز")
+                    case .preparing, .waiting, .downloading:
+                        ProgressView().tint(.white)
+                        Text(state == .downloading ? "جارٍ التثبيت…" : "بانتظار موافقتك…")
+                    }
+                }
+                .font(.system(.headline, design: .rounded).weight(.heavy))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Capsule().fill(LinearGradient(colors: [Theme.teal, Theme.deep],
+                                                          startPoint: .leading, endPoint: .trailing)))
+                .overlay(Capsule().stroke(Color.white.opacity(0.2)))
+            }
+            .buttonStyle(.plain)
+            .disabled(state == .preparing || state == .waiting || state == .downloading)
+
+            Group {
+                switch state {
+                case .idle:
+                    Text("يثبّت التطبيق مباشرة على هذا الآيفون كما في ESign.")
+                case .preparing, .waiting:
+                    Text("اضغط «تثبيت» في النافذة التي تظهر من النظام.")
+                case .downloading:
+                    Text("ابقَ في التطبيق أو اتركه في الخلفية حتى يكتمل التحميل.")
+                case .finished:
+                    Text("تم إرسال التطبيق — تابع ظهوره على الشاشة الرئيسية.")
+                }
+            }
+            .font(.caption)
+            .foregroundColor(Theme.secondaryText)
+            .multilineTextAlignment(.center)
+
+            if state == .waiting || state == .downloading {
+                Button("إيقاف") { model.stopInstall() }
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(Theme.danger)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.black.opacity(0.2)))
     }
 
     private var logCard: some View {

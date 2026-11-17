@@ -40,8 +40,19 @@ final class InjectorViewModel: ObservableObject {
     @Published var preparing: ImportTarget?
     @Published var isRunning = false
     @Published var logLines: [String] = []
-    @Published var output: URL?
+    @Published var result: InjectionResult?
     @Published var errorMessage: String?
+
+    enum InstallState: Equatable {
+        case idle, preparing, waiting, downloading, finished
+    }
+    @Published var installState: InstallState = .idle
+    @Published var autoInstall = true
+
+    var output: URL? { result?.url }
+
+    /// OTA install is only possible for IPAs signed with a real certificate.
+    var canInstall: Bool { result?.signedWithCertificate == true }
 
     private let inputsDir: URL = {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Inputs", isDirectory: true)
@@ -112,7 +123,7 @@ final class InjectorViewModel: ObservableObject {
 
     private func assign(_ url: URL, to target: ImportTarget) {
         switch target {
-        case .ipa: ipa = url; output = nil
+        case .ipa: ipa = url; result = nil
         case .tweak: if !tweaks.contains(where: { $0.lastPathComponent == url.lastPathComponent }) { tweaks.append(url) }
         case .extra: if !extras.contains(where: { $0.lastPathComponent == url.lastPathComponent }) { extras.append(url) }
         case .icon: icon = url
@@ -154,8 +165,9 @@ final class InjectorViewModel: ObservableObject {
         let job = InjectionJob(ipa: ipa, tweaks: tweaks, extras: extras, icon: icon,
                                options: options, signing: signing)
         isRunning = true
-        output = nil
+        result = nil
         logLines = []
+        stopInstall()
 
         // Large stack: zsign uses big buffers and deep recursion when walking the bundle.
         let thread = Thread { [weak self] in
@@ -163,11 +175,11 @@ final class InjectorViewModel: ObservableObject {
                 Task { @MainActor in self?.logLines.append(line) }
             }
             do {
-                let url = try injector.run(job)
-                Task { @MainActor in self?.finish(output: url, error: nil) }
+                let result = try injector.run(job)
+                Task { @MainActor in self?.finish(result: result, error: nil) }
             } catch {
                 let message = error.localizedDescription
-                Task { @MainActor in self?.finish(output: nil, error: message) }
+                Task { @MainActor in self?.finish(result: nil, error: message) }
             }
         }
         thread.stackSize = 16 * 1024 * 1024
@@ -175,13 +187,53 @@ final class InjectorViewModel: ObservableObject {
         thread.start()
     }
 
-    private func finish(output: URL?, error: String?) {
+    private func finish(result: InjectionResult?, error: String?) {
         if let error {
             logLines.append("❌ \(error)")
             errorMessage = error
         }
-        self.output = output
+        self.result = result
         isRunning = false
+        if autoInstall, canInstall {
+            install()
+        }
+    }
+
+    // MARK: - Install on this device
+
+    func install() {
+        guard let result, canInstall, installState == .idle || installState == .finished else { return }
+        let installer = LocalInstaller.shared
+        installer.onEvent = { [weak self] event in
+            Task { @MainActor in
+                guard let self else { return }
+                switch event {
+                case .started: self.installState = .waiting
+                case .downloading: self.installState = .downloading
+                case .finishedServing:
+                    self.installState = .finished
+                    self.logLines.append("📲 اكتمل إرسال الملف — تابع التثبيت على الشاشة الرئيسية")
+                case .stopped:
+                    if self.installState != .finished { self.installState = .idle }
+                }
+            }
+        }
+        installState = .preparing
+        logLines.append("📲 بدء التثبيت على الجهاز…")
+        Task {
+            do {
+                try await installer.install(result)
+            } catch {
+                installState = .idle
+                errorMessage = "تعذّر بدء التثبيت: \(error.localizedDescription)"
+                logLines.append("❌ \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func stopInstall() {
+        LocalInstaller.shared.stop()
+        installState = .idle
     }
 
     func reset() {
@@ -193,7 +245,8 @@ final class InjectorViewModel: ObservableObject {
         signing.p12 = nil
         signing.provision = nil
         signing.password = ""
-        output = nil
+        result = nil
+        stopInstall()
         logLines = []
         try? FileManager.default.removeItem(at: inputsDir)
         try? FileManager.default.createDirectory(at: inputsDir, withIntermediateDirectories: true)

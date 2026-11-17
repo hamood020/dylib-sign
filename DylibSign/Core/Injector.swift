@@ -18,7 +18,7 @@ final class Injector {
         return docs.appendingPathComponent("Output", isDirectory: true)
     }
 
-    func run(_ job: InjectionJob) throws -> URL {
+    func run(_ job: InjectionJob) throws -> InjectionResult {
         let work = fm.temporaryDirectory.appendingPathComponent("job-\(UUID().uuidString)", isDirectory: true)
         let extractDir = work.appendingPathComponent("ipa", isDirectory: true)
         try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
@@ -155,7 +155,15 @@ final class Injector {
             throw InjectorError("فشل إنشاء ملف IPA النهائي")
         }
         log("🎉 تم: \(output.lastPathComponent)")
-        return output
+
+        let finalInfo = (try? readPlist(infoURL)) ?? [:]
+        let bundleID = finalInfo["CFBundleIdentifier"] as? String ?? ""
+        let version = finalInfo["CFBundleShortVersionString"] as? String
+            ?? finalInfo["CFBundleVersion"] as? String ?? "1.0"
+        let name = finalInfo["CFBundleDisplayName"] as? String
+            ?? finalInfo["CFBundleName"] as? String ?? exeName
+        return InjectionResult(url: output, bundleID: bundleID, version: version, name: name,
+                               signedWithCertificate: job.signing.mode == .certificate)
     }
 
     // MARK: - Steps

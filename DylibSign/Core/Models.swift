@@ -82,6 +82,14 @@ struct InjectionJob {
     var signing: SigningConfig
 }
 
+struct InjectionResult {
+    let url: URL
+    let bundleID: String
+    let version: String
+    let name: String
+    let signedWithCertificate: Bool
+}
+
 struct InjectorError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
