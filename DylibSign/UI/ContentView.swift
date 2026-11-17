@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showLog = true
     @State private var showShare = false
     @State private var showGuide = false
+    @State private var showLibrary = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -39,6 +40,10 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showGuide) {
             IPAGuideSheet(onPickFile: { model.pick(.ipa) })
+                .environment(\.layoutDirection, .rightToLeft)
+        }
+        .sheet(isPresented: $showLibrary) {
+            LibrarySheet(model: model)
                 .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showShare) {
@@ -132,7 +137,25 @@ struct ContentView: View {
                 ForEach(model.tweaks, id: \.self) { url in
                     FileChip(url: url) { withAnimation { model.remove(url) } }
                 }
-                AddButton(title: "إضافة dylib / deb", isLoading: model.preparing == .tweak) { model.pick(.tweak) }
+                HStack(spacing: 8) {
+                    AddButton(title: "من ملفاتي", isLoading: model.preparing == .tweak) { model.pick(.tweak) }
+                    Button {
+                        showLibrary = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "books.vertical.fill")
+                            Text("من المكتبة")
+                        }
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .foregroundColor(Theme.navy)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.goldGradient))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isRunning)
+                }
 
                 DisclosureGroup {
                     VStack(spacing: 8) {

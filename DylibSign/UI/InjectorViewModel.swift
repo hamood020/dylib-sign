@@ -78,6 +78,11 @@ final class InjectorViewModel: ObservableObject {
         }
     }
 
+    /// Adds a dylib/deb downloaded from the library to the tweaks list.
+    func addTweakFile(_ url: URL) {
+        receive([url], for: .tweak)
+    }
+
     private func receive(_ urls: [URL], for target: ImportTarget) {
         let accepted = urls.filter { target.allowedExtensions.contains($0.pathExtension.lowercased()) }
         let rejected = urls.filter { !accepted.contains($0) }
