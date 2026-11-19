@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var showShare = false
     @State private var showGuide = false
     @State private var showLibrary = false
+    @State private var showCerts = false
+    @StateObject private var certStore = CertificateStore()
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -46,6 +48,13 @@ struct ContentView: View {
             LibrarySheet(model: model)
                 .environment(\.layoutDirection, .rightToLeft)
         }
+        .sheet(isPresented: $showCerts, onDismiss: applySelectedCertificate) {
+            CertificatesSheet(store: certStore)
+                .environment(\.layoutDirection, .rightToLeft)
+        }
+        .onChange(of: certStore.selectedID) { _ in applySelectedCertificate() }
+        .onChange(of: model.signing.mode) { _ in applySelectedCertificate() }
+        .onAppear(perform: applySelectedCertificate)
         .sheet(isPresented: $showShare) {
             if let output = model.output {
                 ShareSheet(items: [output])
@@ -238,24 +247,69 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if model.signing.mode == .certificate {
-                    FileSlot(placeholder: "الشهادة (.p12)", hint: "ملف الشهادة",
-                             systemImage: "key.fill", file: model.signing.p12,
-                             isLoading: model.preparing == .p12,
-                             onPick: { model.pick(.p12) },
-                             onClear: { if let url = model.signing.p12 { model.remove(url) } })
-                    StyledField(title: "كلمة مرور الشهادة", systemImage: "lock.fill",
-                                text: $model.signing.password, secure: true)
-                    FileSlot(placeholder: "البروفايل (.mobileprovision)", hint: "ملف التوزيع المطابق للشهادة",
-                             systemImage: "doc.badge.gearshape.fill", file: model.signing.provision,
-                             isLoading: model.preparing == .provision,
-                             onPick: { model.pick(.provision) },
-                             onClear: { if let url = model.signing.provision { model.remove(url) } })
+                    if certStore.certificates.isEmpty {
+                        Text("لا توجد شهادات محفوظة.")
+                            .font(.caption).foregroundColor(Theme.secondaryText)
+                    } else {
+                        ForEach(certStore.certificates) { cert in
+                            certRow(cert)
+                        }
+                    }
+                    Button {
+                        showCerts = true
+                    } label: {
+                        Label(certStore.certificates.isEmpty ? "إضافة شهادة" : "إدارة الشهادات",
+                              systemImage: "lock.shield.fill")
+                            .font(.system(.subheadline, design: .rounded).weight(.bold))
+                            .foregroundColor(Theme.gold)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Theme.gold.opacity(0.45), style: StrokeStyle(lineWidth: 1.2, dash: [6, 4])))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
                     OptionToggle(title: "تثبيت مباشرة بعد التوقيع",
                                  subtitle: "يظهر طلب التثبيت من النظام فور انتهاء الحقن",
                                  isOn: $model.autoInstall)
                 }
             }
         }
+    }
+
+    private func certRow(_ cert: SavedCertificate) -> some View {
+        let selected = certStore.selectedID == cert.id
+        return Button {
+            certStore.selectedID = cert.id
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundColor(selected ? Theme.success : Color.white.opacity(0.35))
+                Image(systemName: "lock.doc.fill")
+                    .foregroundColor(Theme.gold)
+                Text(cert.name)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(selected ? Theme.success.opacity(0.12) : Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(selected ? Theme.success.opacity(0.45) : Theme.stroke))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func applySelectedCertificate() {
+        guard model.signing.mode == .certificate, let cert = certStore.selected else { return }
+        let files = certStore.files(for: cert)
+        model.signing.p12 = files.p12
+        model.signing.provision = files.provision
+        model.signing.password = files.password
     }
 
     private var resultCard: some View {
