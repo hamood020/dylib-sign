@@ -60,8 +60,11 @@ final class InjectorViewModel: ObservableObject {
         return dir
     }()
 
+    /// A job with no tweaks is a sign-only / install-only job (still valid).
+    var isSignOnly: Bool { tweaks.isEmpty && extras.isEmpty }
+
     var canStart: Bool {
-        guard ipa != nil, !tweaks.isEmpty, !isRunning, preparing == nil else { return false }
+        guard ipa != nil, !isRunning, preparing == nil else { return false }
         if signing.mode == .certificate {
             return signing.p12 != nil && signing.provision != nil
         }
@@ -70,13 +73,15 @@ final class InjectorViewModel: ObservableObject {
 
     var missingRequirement: String? {
         if ipa == nil { return "اختر ملف IPA" }
-        if tweaks.isEmpty { return "أضف dylib أو deb واحداً على الأقل" }
         if signing.mode == .certificate {
             if signing.p12 == nil { return "اختر ملف الشهادة ‎.p12‎" }
             if signing.provision == nil { return "اختر ملف ‎.mobileprovision‎" }
         }
         return nil
     }
+
+    /// Label for the main action button (inject vs. sign-only).
+    var actionTitle: String { isSignOnly ? "توقيع وتثبيت" : "ابدأ الحقن" }
 
     var lastLog: String? { logLines.last }
 

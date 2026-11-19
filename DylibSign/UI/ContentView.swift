@@ -132,7 +132,7 @@ struct ContentView: View {
     }
 
     private var tweaksCard: some View {
-        StepCard(step: 2, title: "الأدوات", subtitle: "dylib أو deb — يمكن إضافة أكثر من ملف", systemImage: "syringe.fill") {
+        StepCard(step: 2, title: "الأدوات", subtitle: "اختياري — اتركها فارغة لتوقيع التطبيق فقط", systemImage: "syringe.fill") {
             VStack(spacing: 8) {
                 ForEach(model.tweaks, id: \.self) { url in
                     FileChip(url: url) { withAnimation { model.remove(url) } }
@@ -263,7 +263,7 @@ struct ContentView: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 44))
                 .foregroundColor(Theme.success)
-            Text("تم الحقن بنجاح")
+            Text(model.isSignOnly ? "تم بنجاح" : "تم الحقن بنجاح")
                 .font(.system(.title3, design: .rounded).weight(.bold))
                 .foregroundColor(.white)
             if let output = model.output {
@@ -420,8 +420,8 @@ struct ContentView: View {
                         ProgressView().tint(Theme.navy)
                         Text("جارٍ الحقن…")
                     } else {
-                        Image(systemName: "syringe.fill")
-                        Text("ابدأ الحقن")
+                        Image(systemName: model.isSignOnly ? "signature" : "syringe.fill")
+                        Text(model.actionTitle)
                     }
                 }
                 .font(.system(.headline, design: .rounded).weight(.heavy))

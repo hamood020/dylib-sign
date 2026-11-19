@@ -56,67 +56,73 @@ final class Injector {
         for (index, url) in job.extras.enumerated() {
             payload.merge(try collect(url, isExtra: true, scratch: work.appendingPathComponent("extra\(index)")))
         }
-        guard !payload.injectables.isEmpty else {
+        let hasInputs = !job.tweaks.isEmpty || !job.extras.isEmpty
+        if hasInputs && payload.injectables.isEmpty && payload.frameworks.isEmpty && payload.bundles.isEmpty {
             throw InjectorError("لم يُعثر على أي ملف dylib للحقن")
         }
 
-        // 4. Copy into App.app/Frameworks
-        let frameworksDir = app.appendingPathComponent("Frameworks", isDirectory: true)
-        try fm.createDirectory(at: frameworksDir, withIntermediateDirectories: true)
-        var copiedDylibs: [URL] = []
-        var copiedFrameworks: [URL] = []
-        for src in payload.injectables + payload.dependencies {
-            let dst = frameworksDir.appendingPathComponent(src.lastPathComponent)
-            try copyReplacing(src, to: dst)
-            copiedDylibs.append(dst)
-        }
-        for src in payload.frameworks {
-            let dst = frameworksDir.appendingPathComponent(src.lastPathComponent)
-            try copyReplacing(src, to: dst)
-            copiedFrameworks.append(dst)
-        }
-        for src in payload.bundles {
-            try copyReplacing(src, to: app.appendingPathComponent(src.lastPathComponent))
-            log("📁 نُسخ \(src.lastPathComponent) إلى جذر التطبيق")
-        }
-        log("📥 نُسخ \(copiedDylibs.count) dylib و \(copiedFrameworks.count) framework إلى Frameworks/")
-
-        // 5. Fix paths inside the copied binaries
-        let dylibNames = Set(copiedDylibs.map(\.lastPathComponent))
-        let frameworkNames = Set(copiedFrameworks.map { $0.deletingPathExtension().lastPathComponent })
-        var needsSubstrate = false
-        for dylib in copiedDylibs {
-            needsSubstrate = try fixPaths(of: dylib, idPath: "@rpath/\(dylib.lastPathComponent)",
-                                          dylibNames: dylibNames, frameworkNames: frameworkNames,
-                                          options: job.options) || needsSubstrate
-        }
-        for framework in copiedFrameworks {
-            let name = framework.deletingPathExtension().lastPathComponent
-            if name == "CydiaSubstrate" { continue }
-            let binName = (try? readPlist(framework.appendingPathComponent("Info.plist")))?["CFBundleExecutable"] as? String ?? name
-            let bin = framework.appendingPathComponent(binName)
-            guard MachOBinary.isMachO(bin) else { continue }
-            needsSubstrate = try fixPaths(of: bin, idPath: "@rpath/\(name).framework/\(binName)",
-                                          dylibNames: dylibNames, frameworkNames: frameworkNames,
-                                          options: job.options) || needsSubstrate
-        }
-        if needsSubstrate && !fm.fileExists(atPath: frameworksDir.appendingPathComponent("CydiaSubstrate.framework").path) {
-            log("⚠️ الأداة تعتمد على CydiaSubstrate. أضف CydiaSubstrate.framework (مثل ElleKit) في «ملفات إضافية» وإلا سينهار التطبيق عند التشغيل.")
-        }
-
-        // 6. Inject load commands into the main executable
-        if try mainBinary.addRpathIfNeeded("@executable_path/Frameworks") {
-            log("➕ أُضيف LC_RPATH ‏@executable_path/Frameworks")
-        }
-        for dylib in payload.injectables {
-            let loadPath = job.options.location.loadPath(for: dylib.lastPathComponent)
-            if try mainBinary.injectDylib(loadPath, weak: job.options.weakInject) {
-                log("💉 حُقن: \(loadPath)")
-            } else {
-                log("ℹ️ موجود مسبقاً: \(loadPath)")
+        if payload.injectables.isEmpty && payload.frameworks.isEmpty && payload.bundles.isEmpty {
+            // Sign-only mode: no tweaks, just (optionally) modify, sign and repackage.
+            log("ℹ️ بدون حقن — توقيع التطبيق فقط.")
+        } else {
+            // 4. Copy into App.app/Frameworks
+            let frameworksDir = app.appendingPathComponent("Frameworks", isDirectory: true)
+            try fm.createDirectory(at: frameworksDir, withIntermediateDirectories: true)
+            var copiedDylibs: [URL] = []
+            var copiedFrameworks: [URL] = []
+            for src in payload.injectables + payload.dependencies {
+                let dst = frameworksDir.appendingPathComponent(src.lastPathComponent)
+                try copyReplacing(src, to: dst)
+                copiedDylibs.append(dst)
             }
+            for src in payload.frameworks {
+                let dst = frameworksDir.appendingPathComponent(src.lastPathComponent)
+                try copyReplacing(src, to: dst)
+                copiedFrameworks.append(dst)
+            }
+            for src in payload.bundles {
+                try copyReplacing(src, to: app.appendingPathComponent(src.lastPathComponent))
+                log("📁 نُسخ \(src.lastPathComponent) إلى جذر التطبيق")
+            }
+            log("📥 نُسخ \(copiedDylibs.count) dylib و \(copiedFrameworks.count) framework إلى Frameworks/")
+
+            // 5. Fix paths inside the copied binaries
+            let dylibNames = Set(copiedDylibs.map(\.lastPathComponent))
+            let frameworkNames = Set(copiedFrameworks.map { $0.deletingPathExtension().lastPathComponent })
+            var needsSubstrate = false
+            for dylib in copiedDylibs {
+                needsSubstrate = try fixPaths(of: dylib, idPath: "@rpath/\(dylib.lastPathComponent)",
+                                              dylibNames: dylibNames, frameworkNames: frameworkNames,
+                                              options: job.options) || needsSubstrate
+            }
+            for framework in copiedFrameworks {
+                let name = framework.deletingPathExtension().lastPathComponent
+                if name == "CydiaSubstrate" { continue }
+                let binName = (try? readPlist(framework.appendingPathComponent("Info.plist")))?["CFBundleExecutable"] as? String ?? name
+                let bin = framework.appendingPathComponent(binName)
+                guard MachOBinary.isMachO(bin) else { continue }
+                needsSubstrate = try fixPaths(of: bin, idPath: "@rpath/\(name).framework/\(binName)",
+                                              dylibNames: dylibNames, frameworkNames: frameworkNames,
+                                              options: job.options) || needsSubstrate
+            }
+            if needsSubstrate && !fm.fileExists(atPath: frameworksDir.appendingPathComponent("CydiaSubstrate.framework").path) {
+                log("⚠️ الأداة تعتمد على CydiaSubstrate. أضف CydiaSubstrate.framework (مثل ElleKit) في «ملفات إضافية» وإلا سينهار التطبيق عند التشغيل.")
+            }
+
+            // 6. Inject load commands into the main executable
+            if try mainBinary.addRpathIfNeeded("@executable_path/Frameworks") {
+                log("➕ أُضيف LC_RPATH ‏@executable_path/Frameworks")
+            }
+            for dylib in payload.injectables {
+                let loadPath = job.options.location.loadPath(for: dylib.lastPathComponent)
+                if try mainBinary.injectDylib(loadPath, weak: job.options.weakInject) {
+                    log("💉 حُقن: \(loadPath)")
+                } else {
+                    log("ℹ️ موجود مسبقاً: \(loadPath)")
+                }
+            }
+            try mainBinary.save()
         }
-        try mainBinary.save()
 
         // 7. App modifications
         try applyModifications(app: app, infoURL: infoURL, options: job.options)
@@ -147,7 +153,14 @@ final class Injector {
         // 9. Zip
         try fm.createDirectory(at: Self.outputDirectory, withIntermediateDirectories: true)
         let baseName = job.ipa.deletingPathExtension().lastPathComponent
-        let suffix = job.signing.mode == .none ? "injected" : "injected_signed"
+        let injected = !job.tweaks.isEmpty || !job.extras.isEmpty
+        let suffix: String
+        switch (injected, job.signing.mode) {
+        case (false, .none): suffix = "repacked"
+        case (false, _): suffix = "signed"
+        case (true, .none): suffix = "injected"
+        case (true, _): suffix = "injected_signed"
+        }
         let output = Self.outputDirectory.appendingPathComponent("\(baseName)_\(suffix).ipa")
         try? fm.removeItem(at: output)
         log("🗜️ ضغط الملف النهائي…")
